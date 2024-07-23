@@ -1,0 +1,137 @@
+TYPES: BEGIN OF ty_tab,
+         c001 TYPE string,
+         c002 TYPE string,
+         c003 TYPE string,
+         c004 TYPE string,
+         c005 TYPE string,
+         c006 TYPE string,
+       END OF ty_tab.
+TYPES: BEGIN OF xls_line,
+         data TYPE x,
+       END OF xls_line.
+
+DATA: gt_tab      TYPE TABLE OF ty_tab,
+      gs_tab      TYPE ty_tab,
+      lt_bin_data TYPE STANDARD TABLE OF xls_line,
+      lv_file     TYPE string,
+      lv_rc       TYPE i,
+      it_files    TYPE filetable,
+      lv_action   TYPE i.
+
+FIELD-SYMBOLS: <lfs_data_tab> TYPE STANDARD TABLE,
+               <wtab>         TYPE any,
+               <lv_field>     TYPE any,
+	       <lv_field2>    TYPE any.
+
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME.
+
+PARAMETERS: pfilelo TYPE localfile.
+
+SELECTION-SCREEN END OF BLOCK b1.
+
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR pfilelo.
+
+  cl_gui_frontend_services=>file_open_dialog(
+    EXPORTING
+*      window_title            =     " Title Of File Open Dialog
+      default_extension       = |TXT (*.txt)\|*.txt\|XLS (*.xls)\|*.xls\|XLSX (*.xlsx)\|*.xlsx\|{ cl_gui_frontend_services=>filetype_all }|    " Default Extension
+    CHANGING
+      file_table              = it_files    " Table Holding Selected Files
+      rc                      =  lv_rc   " Return Code, Number of Files or -1 If Error Occurred
+    EXCEPTIONS
+      file_open_dialog_failed = 1
+      cntl_error              = 2
+      error_no_gui            = 3
+      not_supported_by_gui    = 4
+      OTHERS                  = 5
+  ).
+  IF sy-subrc <> 0.
+*   MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+*              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+  IF it_files IS NOT INITIAL.
+    pfilelo = it_files[ 1 ]-filename.       "Read table it_files with index 1
+    lv_file = it_files[ 1 ]-filename.
+  ENDIF.
+
+
+
+START-OF-SELECTION.
+
+
+  cl_gui_frontend_services=>gui_upload(
+    EXPORTING
+      filename = lv_file
+      filetype = 'BIN'
+    IMPORTING
+      filelength = DATA(lv_file_length)
+      header   = DATA(lv_xstring_header)
+    CHANGING
+      data_tab = lt_bin_data
+    EXCEPTIONS
+      OTHERS = 99 ).
+
+  CALL FUNCTION 'SCMS_BINARY_TO_XSTRING'
+    EXPORTING
+      input_length = lv_file_length
+    IMPORTING
+      buffer       = lv_xstring_header
+    TABLES
+      binary_tab   = lt_bin_data
+    EXCEPTIONS
+      failed       = 1
+      OTHERS       = 2.
+
+
+  IF sy-subrc = 0.
+
+    TRY.
+        DATA(lo_excel) = NEW cl_fdt_xl_spreadsheet(
+                       document_name = lv_file
+                       xdocument     = lv_xstring_header ) .
+
+        lo_excel->if_fdt_doc_spreadsheet~get_worksheet_names(
+          IMPORTING
+            worksheet_names = DATA(lt_worksheets) ).
+
+        DATA(lv_woksheetname) = lt_worksheets[ 1 ].  "Read first sheet
+        DATA(lo_data_ref) = lo_excel->if_fdt_doc_spreadsheet~get_itab_from_worksheet(
+                                         lv_woksheetname ).
+
+        ASSIGN lo_data_ref->* TO <lfs_data_tab>.
+        LOOP AT <lfs_data_tab> ASSIGNING <wtab>.
+          DO 6 TIMES.
+            ASSIGN COMPONENT sy-index OF STRUCTURE <wtab> TO <lv_field>.
+            IF sy-subrc EQ 0.
+***	      ASSIGN COMPONENT sy-index OF STRUCTURE gs_tab TO <lv_field2>.	"Dynamically chooses fields of mapping table
+***           <lv_field2> = <lv_field>.
+**------------------------------------------------------------>>>>>
+              CASE sy-index.
+                WHEN 1.
+                  gs_tab-c001 = <lv_field>.
+                WHEN 2.
+                  gs_tab-c002 = <lv_field>.
+                WHEN 3.
+                  gs_tab-c003 = <lv_field>.
+                WHEN 4.
+                  gs_tab-c004 = <lv_field>.
+                WHEN 5.
+                  gs_tab-c005 = <lv_field>.
+                WHEN 6.
+                  gs_tab-c006 = <lv_field>.
+
+              ENDCASE.
+**<<<<<-------------------------------------------------------------
+            ENDIF.
+          ENDDO.
+          APPEND gs_tab TO gt_tab.
+	  CLEAR gs_tab.
+        ENDLOOP.
+
+      CATCH cx_fdt_excel_core.
+        "Error handling
+    ENDTRY.
+
+  ENDIF.
